@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>YouTube Summarizer · David Projects</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,500;8..60,700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="index.html"><span class="brand-mark">D</span>David</a>
+      <nav class="topnav">
+        <a href="index.html#projects">Projects</a>
+        <a href="index.html#about">About</a>
+        <a class="nav-cta" href="index.html#contact">Contact</a>
+      </nav>
+    </header>
+
+    <main class="demo-main">
+      <nav class="demo-nav">
+        <a class="back-link" href="index.html">← All projects</a>
+      </nav>
+
+      <header class="demo-header">
+        <p class="eyebrow">Video intelligence · Gemini API</p>
+        <h1>YouTube Summarizer</h1>
+        <p>
+          Paste a YouTube link, then summarize it or ask questions about its
+          content. Gemini reads the video directly — no transcript scraping or
+          server required.
+        </p>
+      </header>
+
+      <section class="demo-panel">
+        <div class="controls">
+          <div class="field" style="flex:1 1 100%;">
+            <label for="url">YouTube video link</label>
+            <input type="text" id="url" placeholder="https://www.youtube.com/watch?v=…" />
+          </div>
+        </div>
+        <div class="controls">
+          <button class="button button-primary" id="summarize">Summarize video</button>
+          <button class="button button-secondary" id="reset">Clear 🗑️</button>
+        </div>
+        <p class="hint">
+          Use public, non-age-restricted videos for best results.
+        </p>
+      </section>
+
+      <section class="demo-panel">
+        <div id="player" class="stage" style="display:none; margin-bottom:18px;"></div>
+        <div class="chat-log" id="log">
+          <div class="empty-state" id="empty">
+            <span class="emoji">🎬</span>
+            <strong>Paste a video link to get started</strong>
+            <span>Then hit “Summarize video” or ask your own question below.</span>
+          </div>
+        </div>
+        <div class="chat-input-row">
+          <textarea id="msg" rows="1" placeholder="Ask something about the video…"></textarea>
+          <button class="button button-primary" id="send">Ask</button>
+        </div>
+        <p class="status" id="status"></p>
+      </section>
+    </main>
+
+    <script>
+      const MODEL = "gemini-2.5-flash";
+      const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
+      // Baked-in API key (rotate it at aistudio.google.com/apikey if it leaks).
+      const API_KEY = "AIzaSyC3EIsqO9C_m0MdBsHPRU1eZj_KoAO8xIU";
+
+      const urlInput = document.querySelector("#url");
+      const player = document.querySelector("#player");
+      const log = document.querySelector("#log");
+      const empty = document.querySelector("#empty");
+      const msgBox = document.querySelector("#msg");
+      const sendBtn = document.querySelector("#send");
+      const summarizeBtn = document.querySelector("#summarize");
+      const resetBtn = document.querySelector("#reset");
+      const statusEl = document.querySelector("#status");
+
+      let history = []; // text-only Q&A turns for context
+
+      function setStatus(msg, isError = false) {
+        statusEl.textContent = msg;
+        statusEl.classList.toggle("error", isError);
+      }
+
+      function clearEmptyState() {
+        if (empty && empty.parentNode) empty.remove();
+      }
+
+      function extractVideoId(url) {
+        const patterns = [
+          /(?:youtube\.com\/watch\?v=)([a-zA-Z0-9_-]{11})/,
+          /(?:youtu\.be\/)([a-zA-Z0-9_-]{11})/,
+          /(?:youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
+          /(?:youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/,
+        ];
+        for (const p of patterns) {
+          const m = url.match(p);
+          if (m) return m[1];
+        }
+        if (/^[a-zA-Z0-9_-]{11}$/.test(url.trim())) return url.trim();
+        return "";
+      }
+
+      function showPlayer(id) {
+        player.style.display = "block";
+        player.innerHTML = `<iframe width="100%" height="360" src="https://www.youtube.com/embed/${id}" frameborder="0" allowfullscreen></iframe>`;
+      }
+
+      function addBubble(role, text) {
+        const div = document.createElement("div");
+        div.className = `bubble ${role}`;
+        div.textContent = text;
+        log.appendChild(div);
+        log.scrollTop = log.scrollHeight;
+      }
+
+      function showTyping() {
+        const div = document.createElement("div");
+        div.className = "bubble bot";
+        div.innerHTML = '<span class="typing"><span></span><span></span><span></span></span>';
+        log.appendChild(div);
+        log.scrollTop = log.scrollHeight;
+        return div;
+      }
+
+      async function ask(question) {
+        const rawUrl = urlInput.value.trim();
+        const id = extractVideoId(rawUrl);
+        if (!id) {
+          setStatus("Please enter a valid YouTube link or 11-character video ID.", true);
+          return;
+        }
+        const normalizedUrl = `https://www.youtube.com/watch?v=${id}`;
+        showPlayer(id);
+
+        clearEmptyState();
+        addBubble("user", question);
+        sendBtn.disabled = true;
+        summarizeBtn.disabled = true;
+        setStatus("Analyzing video…");
+        const typingBubble = showTyping();
+
+        // Build contents: prior text context + current turn (video + question)
+        const contents = [...history];
+        contents.push({
+          role: "user",
+          parts: [
+            { fileData: { fileUri: normalizedUrl } },
+            { text: question },
+          ],
+        });
+
+        try {
+          const res = await fetch(`${API_BASE}/${MODEL}:generateContent?key=${encodeURIComponent(API_KEY)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents,
+              generationConfig: { temperature: 0.4, maxOutputTokens: 2048 },
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data?.error?.message || `Request failed (${res.status}).`);
+
+          const text = (data?.candidates?.[0]?.content?.parts || [])
+            .map((p) => p.text || "")
+            .join("") || "(no response)";
+
+          typingBubble.remove();
+          addBubble("bot", text);
+          // Keep lightweight text history for follow-ups
+          history.push({ role: "user", parts: [{ text: question }] });
+          history.push({ role: "model", parts: [{ text }] });
+          if (history.length > 20) history = history.slice(-20);
+          setStatus("");
+        } catch (err) {
+          typingBubble.remove();
+          addBubble("bot", `⚠️ ${err.message}`);
+          setStatus(err.message, true);
+        } finally {
+          sendBtn.disabled = false;
+          summarizeBtn.disabled = false;
+        }
+      }
+
+      summarizeBtn.addEventListener("click", () => {
+        ask(
+          "Summarize this video. Give a 2-3 sentence overview, then the key points as a bulleted list."
+        );
+      });
+
+      function sendQuestion() {
+        const q = msgBox.value.trim();
+        if (!q) return;
+        msgBox.value = "";
+        msgBox.style.height = "auto";
+        ask(q);
+      }
+
+      sendBtn.addEventListener("click", sendQuestion);
+      msgBox.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          sendQuestion();
+        }
+      });
+      msgBox.addEventListener("input", () => {
+        msgBox.style.height = "auto";
+        msgBox.style.height = msgBox.scrollHeight + "px";
+      });
+      resetBtn.addEventListener("click", () => {
+        history = [];
+        log.innerHTML = "";
+        player.style.display = "none";
+        player.innerHTML = "";
+        setStatus("Cleared.");
+      });
+    </script>
+  </body>
+</html>

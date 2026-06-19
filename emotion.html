@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Emotion Detection · David Projects</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,500;8..60,700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="index.html"><span class="brand-mark">D</span>David</a>
+      <nav class="topnav">
+        <a href="index.html#projects">Projects</a>
+        <a href="index.html#about">About</a>
+        <a class="nav-cta" href="index.html#contact">Contact</a>
+      </nav>
+    </header>
+
+    <main class="demo-main">
+      <nav class="demo-nav">
+        <a class="back-link" href="index.html">← All projects</a>
+      </nav>
+
+      <header class="demo-header">
+        <p class="eyebrow">Computer vision · in-browser</p>
+        <h1>Emotion Detection</h1>
+        <p>
+          Detect faces and label the strongest expression on each — from an
+          uploaded photo or live from your webcam. Everything runs locally in your
+          browser using face-api.js, with no upload and no API key.
+        </p>
+      </header>
+
+      <section class="demo-panel">
+        <div class="controls">
+          <div class="field">
+            <label for="file">Upload an image (JPG / PNG)</label>
+            <input type="file" id="file" accept="image/*" />
+          </div>
+          <button class="button button-primary" id="analyze" disabled>Detect emotions</button>
+          <span class="hint">— or —</span>
+          <button class="button button-primary" id="startCam" disabled>Use webcam 📷</button>
+          <button class="button button-secondary" id="stopCam" disabled>Stop webcam</button>
+        </div>
+
+        <div class="stage">
+          <video id="video" autoplay muted playsinline style="display:none"></video>
+          <canvas id="canvas"></canvas>
+        </div>
+        <p class="status" id="status">Loading detection models…</p>
+
+        <p class="note">
+          Models (~2&nbsp;MB) load once from a CDN. Images and webcam frames never
+          leave your device. Works best on clear, front-facing faces with good
+          lighting. Detected emotions: happy, sad, angry, surprised, fearful,
+          disgusted, neutral.
+        </p>
+      </section>
+    </main>
+
+    <script type="module">
+      import * as faceapi from "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.esm.js";
+
+      const MODEL_URL = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model";
+      const fileInput = document.querySelector("#file");
+      const analyzeBtn = document.querySelector("#analyze");
+      const startCamBtn = document.querySelector("#startCam");
+      const stopCamBtn = document.querySelector("#stopCam");
+      const video = document.querySelector("#video");
+      const canvas = document.querySelector("#canvas");
+      const statusEl = document.querySelector("#status");
+      const ctx = canvas.getContext("2d");
+
+      let modelsReady = false;
+      let currentImage = null;
+      let stream = null;
+      let rafId = null;
+
+      function setStatus(msg, isError = false) {
+        statusEl.textContent = msg;
+        statusEl.classList.toggle("error", isError);
+      }
+
+      async function loadModels() {
+        try {
+          await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+          await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
+          modelsReady = true;
+          startCamBtn.disabled = false;
+          setStatus("Models loaded. Upload an image or start the webcam.");
+          if (currentImage) analyzeBtn.disabled = false;
+        } catch (err) {
+          setStatus("Could not load detection models. Check your connection and refresh.", true);
+          console.error(err);
+        }
+      }
+
+      // Draw a labelled box for one detection. `mirror` flips label x for webcam.
+      function drawDetection(d, scale = 1) {
+        const { x, y, width, height } = d.detection.box;
+        const [topEmotion, score] = Object.entries(d.expressions).sort(
+          (a, b) => b[1] - a[1]
+        )[0];
+        const label = `${topEmotion} ${(score * 100).toFixed(0)}%`;
+
+        const fontSize = Math.max(14, Math.round(canvas.width / 36));
+        ctx.lineWidth = Math.max(2, Math.round(canvas.width / 320));
+        ctx.font = `700 ${fontSize}px "Space Grotesk", sans-serif`;
+
+        ctx.strokeStyle = "#7ce0c3";
+        ctx.strokeRect(x, y, width, height);
+
+        const textW = ctx.measureText(label).width;
+        ctx.fillStyle = "#7ce0c3";
+        ctx.fillRect(x, y - fontSize - 8, textW + 14, fontSize + 8);
+        ctx.fillStyle = "#08201a";
+        ctx.fillText(label, x + 7, y - 8);
+      }
+
+      // ---------- Image upload mode ----------
+      fileInput.addEventListener("change", () => {
+        const file = fileInput.files[0];
+        if (!file) return;
+        stopWebcam();
+        const img = new Image();
+        img.onload = () => {
+          currentImage = img;
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.drawImage(img, 0, 0);
+          if (modelsReady) {
+            analyzeBtn.disabled = false;
+            setStatus("Ready. Click “Detect emotions”.");
+          }
+        };
+        img.src = URL.createObjectURL(file);
+      });
+
+      analyzeBtn.addEventListener("click", async () => {
+        if (!currentImage || !modelsReady) return;
+        analyzeBtn.disabled = true;
+        setStatus("Detecting faces…");
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.drawImage(currentImage, 0, 0);
+
+        const detections = await faceapi
+          .detectAllFaces(canvas, new faceapi.TinyFaceDetectorOptions({ inputSize: 416 }))
+          .withFaceExpressions();
+
+        if (!detections.length) {
+          setStatus("No faces detected. Try a clearer, front-facing photo.", true);
+          analyzeBtn.disabled = false;
+          return;
+        }
+        detections.forEach((d) => drawDetection(d));
+        setStatus(`Detected ${detections.length} face${detections.length > 1 ? "s" : ""}.`);
+        analyzeBtn.disabled = false;
+      });
+
+      // ---------- Webcam mode ----------
+      async function webcamLoop() {
+        if (!stream) return;
+        const detections = await faceapi
+          .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 320 }))
+          .withFaceExpressions();
+
+        // Mirror the video so it reads like a mirror
+        ctx.setTransform(-1, 0, 0, 1, canvas.width, 0);
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        // Draw labels in normal orientation on top
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+        const resized = faceapi.resizeResults(detections, {
+          width: canvas.width,
+          height: canvas.height,
+        });
+        // Flip each box x to match the mirrored frame
+        resized.forEach((d) => {
+          const b = d.detection.box;
+          const mirrored = {
+            ...d,
+            detection: {
+              ...d.detection,
+              box: { x: canvas.width - b.x - b.width, y: b.y, width: b.width, height: b.height },
+            },
+          };
+          drawDetection(mirrored);
+        });
+
+        if (detections.length)
+          setStatus(`Live: ${detections.length} face${detections.length > 1 ? "s" : ""} tracked.`);
+        else setStatus("Looking for a face… make sure you're well lit and centered.");
+
+        rafId = requestAnimationFrame(webcamLoop);
+      }
+
+      startCamBtn.addEventListener("click", async () => {
+        if (!modelsReady) return;
+        currentImage = null;
+        analyzeBtn.disabled = true;
+        fileInput.value = "";
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+          video.srcObject = stream;
+          await video.play();
+          canvas.width = video.videoWidth || 640;
+          canvas.height = video.videoHeight || 480;
+          startCamBtn.disabled = true;
+          stopCamBtn.disabled = false;
+          setStatus("Webcam on. Detecting emotions live…");
+          webcamLoop();
+        } catch (err) {
+          setStatus("Could not access the camera. Grant permission and try again.", true);
+          console.error(err);
+        }
+      });
+
+      function stopWebcam() {
+        if (rafId) cancelAnimationFrame(rafId);
+        rafId = null;
+        if (stream) stream.getTracks().forEach((t) => t.stop());
+        stream = null;
+        stopCamBtn.disabled = true;
+        if (modelsReady) startCamBtn.disabled = false;
+      }
+
+      stopCamBtn.addEventListener("click", () => {
+        stopWebcam();
+        setStatus("Webcam stopped.");
+      });
+
+      loadModels();
+    </script>
+  </body>
+</html>

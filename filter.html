@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Face Filter · David Projects</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,500;8..60,700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="index.html"><span class="brand-mark">D</span>David</a>
+      <nav class="topnav">
+        <a href="index.html#projects">Projects</a>
+        <a href="index.html#about">About</a>
+        <a class="nav-cta" href="index.html#contact">Contact</a>
+      </nav>
+    </header>
+
+    <main class="demo-main">
+      <nav class="demo-nav">
+        <a class="back-link" href="index.html">← All projects</a>
+      </nav>
+
+      <header class="demo-header">
+        <p class="eyebrow">Live webcam effect · in-browser</p>
+        <h1>Face Filter</h1>
+        <p>
+          Turn on your camera and the page tracks your face in real time, placing
+          a sunglasses overlay across your eyes. Powered by face-api.js — the video
+          feed stays on your device and is never uploaded.
+        </p>
+      </header>
+
+      <section class="demo-panel">
+        <div class="controls">
+          <button class="button button-primary" id="start" disabled>Start camera</button>
+          <button class="button button-secondary" id="stop" disabled>Stop</button>
+        </div>
+
+        <div class="stage">
+          <video id="video" autoplay muted playsinline style="display:none"></video>
+          <canvas id="canvas"></canvas>
+        </div>
+        <p class="status" id="status">Loading detection models…</p>
+
+        <p class="note">
+          Your browser will ask for camera permission. Nothing is recorded or sent
+          anywhere — detection and drawing happen entirely in this tab.
+        </p>
+      </section>
+    </main>
+
+    <script type="module">
+      import * as faceapi from "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.esm.js";
+
+      const MODEL_URL = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model";
+      const video = document.querySelector("#video");
+      const canvas = document.querySelector("#canvas");
+      const ctx = canvas.getContext("2d");
+      const startBtn = document.querySelector("#start");
+      const stopBtn = document.querySelector("#stop");
+      const statusEl = document.querySelector("#status");
+
+      let modelsReady = false;
+      let stream = null;
+      let rafId = null;
+
+      function setStatus(msg, isError = false) {
+        statusEl.textContent = msg;
+        statusEl.classList.toggle("error", isError);
+      }
+
+      async function loadModels() {
+        try {
+          await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+          await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+          modelsReady = true;
+          startBtn.disabled = false;
+          setStatus("Models loaded. Click “Start camera”.");
+        } catch (err) {
+          setStatus("Could not load detection models. Check your connection and refresh.", true);
+          console.error(err);
+        }
+      }
+
+      function eyeCenter(points) {
+        const sum = points.reduce((a, p) => ({ x: a.x + p.x, y: a.y + p.y }), { x: 0, y: 0 });
+        return { x: sum.x / points.length, y: sum.y / points.length };
+      }
+
+      function drawSunglasses(left, right) {
+        const dx = right.x - left.x;
+        const dy = right.y - left.y;
+        const angle = Math.atan2(dy, dx);
+        const dist = Math.hypot(dx, dy);
+        const lens = dist * 0.55;
+        const mid = { x: (left.x + right.x) / 2, y: (left.y + right.y) / 2 };
+
+        ctx.save();
+        ctx.translate(mid.x, mid.y);
+        ctx.rotate(angle);
+        ctx.fillStyle = "rgba(8, 12, 20, 0.92)";
+        ctx.strokeStyle = "#0b1020";
+        ctx.lineWidth = Math.max(3, lens * 0.18);
+
+        const half = dist / 2;
+        // Bridge
+        ctx.beginPath();
+        ctx.moveTo(-half + lens * 0.5, 0);
+        ctx.lineTo(half - lens * 0.5, 0);
+        ctx.stroke();
+        // Arms
+        ctx.beginPath();
+        ctx.moveTo(-half - lens * 0.5, 0);
+        ctx.lineTo(-half - lens * 1.4, -lens * 0.2);
+        ctx.moveTo(half + lens * 0.5, 0);
+        ctx.lineTo(half + lens * 1.4, -lens * 0.2);
+        ctx.stroke();
+        // Lenses
+        for (const cx of [-half, half]) {
+          ctx.beginPath();
+          ctx.ellipse(cx, 0, lens, lens * 0.78, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+          // Highlight
+          ctx.beginPath();
+          ctx.ellipse(cx - lens * 0.3, -lens * 0.25, lens * 0.28, lens * 0.18, -0.5, 0, Math.PI * 2);
+          ctx.fillStyle = "rgba(124, 224, 195, 0.35)";
+          ctx.fill();
+          ctx.fillStyle = "rgba(8, 12, 20, 0.92)";
+        }
+        ctx.restore();
+      }
+
+      async function loop() {
+        if (!stream) return;
+        const det = await faceapi
+          .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 320 }))
+          .withFaceLandmarks();
+
+        ctx.save();
+        // Mirror the feed so it feels like a mirror
+        ctx.translate(canvas.width, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        const resized = faceapi.resizeResults(det, { width: canvas.width, height: canvas.height });
+        resized.forEach((d) => {
+          const lm = d.landmarks;
+          drawSunglasses(eyeCenter(lm.getLeftEye()), eyeCenter(lm.getRightEye()));
+        });
+        ctx.restore();
+
+        if (det.length) setStatus(`Tracking ${det.length} face${det.length > 1 ? "s" : ""}. 😎`);
+        else setStatus("Looking for a face… make sure you're well lit and centered.");
+
+        rafId = requestAnimationFrame(loop);
+      }
+
+      startBtn.addEventListener("click", async () => {
+        if (!modelsReady) return;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+          video.srcObject = stream;
+          await video.play();
+          canvas.width = video.videoWidth || 640;
+          canvas.height = video.videoHeight || 480;
+          startBtn.disabled = true;
+          stopBtn.disabled = false;
+          setStatus("Camera on. Tracking…");
+          loop();
+        } catch (err) {
+          setStatus("Could not access the camera. Grant permission and try again.", true);
+          console.error(err);
+        }
+      });
+
+      stopBtn.addEventListener("click", () => {
+        if (rafId) cancelAnimationFrame(rafId);
+        if (stream) stream.getTracks().forEach((t) => t.stop());
+        stream = null;
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        setStatus("Camera stopped.");
+      });
+
+      loadModels();
+    </script>
+  </body>
+</html>

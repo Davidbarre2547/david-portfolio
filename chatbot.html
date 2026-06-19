@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gemini ChatBot · David Projects</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,500;8..60,700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="index.html"><span class="brand-mark">D</span>David</a>
+      <nav class="topnav">
+        <a href="index.html#projects">Projects</a>
+        <a href="index.html#about">About</a>
+        <a class="nav-cta" href="index.html#contact">Contact</a>
+      </nav>
+    </header>
+
+    <main class="demo-main">
+      <nav class="demo-nav">
+        <a class="back-link" href="index.html">← All projects</a>
+      </nav>
+
+      <header class="demo-header">
+        <p class="eyebrow">Generative AI · Gemini API</p>
+        <h1>Gemini ChatBot</h1>
+        <p>
+          Chat naturally with conversation memory, or ask it to “draw” /
+          “generate an image of…” to get a picture back. Powered by Gemini —
+          just start typing.
+        </p>
+      </header>
+
+      <section class="demo-panel">
+        <div class="panel-head">
+          <h2>Conversation</h2>
+          <button class="button button-secondary" id="reset">Clear chat 🗑️</button>
+        </div>
+
+        <div class="chat-log" id="log">
+          <div class="empty-state" id="empty">
+            <span class="emoji">🤖</span>
+            <strong>Hey! What can I help you with?</strong>
+            <span>Ask anything, or try one of the prompts below.</span>
+          </div>
+        </div>
+
+        <div class="suggestions" id="suggestions">
+          <button class="chip">Give me 3 cool AI project ideas</button>
+          <button class="chip">Explain how neural networks work</button>
+          <button class="chip">Generate an image of a persian cat</button>
+          <button class="chip">Write a short poem about the ocean</button>
+        </div>
+
+        <div class="chat-input-row">
+          <textarea id="msg" rows="1" placeholder="Type a message… (try: generate an image of a persian cat)"></textarea>
+          <button class="button button-primary" id="send">Send 🚀</button>
+        </div>
+        <p class="status" id="status"></p>
+      </section>
+    </main>
+
+    <script>
+      const CHAT_MODEL = "gemini-2.5-flash";
+      const IMAGE_MODEL = "gemini-2.5-flash-image-preview";
+      const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
+      // Baked-in API key (rotate it at aistudio.google.com/apikey if it leaks).
+      const API_KEY = "AIzaSyC3EIsqO9C_m0MdBsHPRU1eZj_KoAO8xIU";
+      const SYSTEM_PROMPT =
+        "You are a helpful, creative and friendly AI assistant. You remember the " +
+        "full conversation and use that context to give relevant, coherent answers. " +
+        "Be concise but thorough.";
+      const IMAGE_TRIGGERS = [
+        "generate an image", "create an image", "draw", "make a picture",
+        "generate a picture", "create a picture", "make an image",
+        "show me an image", "generate image", "create image", "paint",
+        "illustrate", "sketch", "design an image", "visualize",
+        "render an image", "make art", "create art", "/image",
+      ];
+
+      const log = document.querySelector("#log");
+      const empty = document.querySelector("#empty");
+      const suggestions = document.querySelector("#suggestions");
+      const msgBox = document.querySelector("#msg");
+      const sendBtn = document.querySelector("#send");
+      const statusEl = document.querySelector("#status");
+      const resetBtn = document.querySelector("#reset");
+
+      let history = []; // {role, parts:[{text}]}
+
+      function setStatus(msg, isError = false) {
+        statusEl.textContent = msg;
+        statusEl.classList.toggle("error", isError);
+      }
+
+      function clearEmptyState() {
+        if (empty) empty.remove();
+        if (suggestions) suggestions.style.display = "none";
+      }
+
+      function addBubble(role, text, imgSrc) {
+        const div = document.createElement("div");
+        div.className = `bubble ${role}`;
+        if (text) div.textContent = text;
+        if (imgSrc) {
+          const img = document.createElement("img");
+          img.src = imgSrc;
+          div.appendChild(img);
+        }
+        log.appendChild(div);
+        log.scrollTop = log.scrollHeight;
+        return div;
+      }
+
+      function showTyping() {
+        const div = document.createElement("div");
+        div.className = "bubble bot";
+        div.innerHTML = '<span class="typing"><span></span><span></span><span></span></span>';
+        log.appendChild(div);
+        log.scrollTop = log.scrollHeight;
+        return div;
+      }
+
+      function isImageRequest(text) {
+        const t = text.toLowerCase().trim();
+        return IMAGE_TRIGGERS.some((trig) => t.includes(trig));
+      }
+
+      async function callGemini(model, contents, extraConfig = {}) {
+        const body = {
+          contents,
+          generationConfig: { temperature: 0.8, maxOutputTokens: 2048, ...extraConfig },
+        };
+        if (!extraConfig.responseModalities) {
+          body.systemInstruction = { parts: [{ text: SYSTEM_PROMPT }] };
+        }
+        const res = await fetch(`${API_BASE}/${model}:generateContent?key=${encodeURIComponent(API_KEY)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data?.error?.message || `Request failed (${res.status}).`);
+        }
+        return data;
+      }
+
+      function extractParts(data) {
+        const parts = data?.candidates?.[0]?.content?.parts || [];
+        let text = "";
+        let imgSrc = null;
+        for (const p of parts) {
+          if (p.text) text += p.text;
+          else if (p.inlineData?.data) {
+            imgSrc = `data:${p.inlineData.mimeType || "image/png"};base64,${p.inlineData.data}`;
+          }
+        }
+        return { text, imgSrc };
+      }
+
+      async function send() {
+        const message = msgBox.value.trim();
+        if (!message) return;
+
+        clearEmptyState();
+        addBubble("user", message);
+        msgBox.value = "";
+        msgBox.style.height = "auto";
+        sendBtn.disabled = true;
+
+        const wantsImage = isImageRequest(message);
+        setStatus(wantsImage ? "Generating image…" : "Thinking…");
+        const typingBubble = showTyping();
+
+        try {
+          if (wantsImage) {
+            history.push({ role: "user", parts: [{ text: message }] });
+            const data = await callGemini(IMAGE_MODEL, history, {
+              responseModalities: ["TEXT", "IMAGE"],
+              temperature: 1.0,
+            });
+            const { text, imgSrc } = extractParts(data);
+            const reply = text || "Here's the generated image!";
+            typingBubble.remove();
+            addBubble("bot", reply, imgSrc);
+            history.push({ role: "model", parts: [{ text: reply + " [image generated]" }] });
+          } else {
+            history.push({ role: "user", parts: [{ text: message }] });
+            const data = await callGemini(CHAT_MODEL, history);
+            const { text } = extractParts(data);
+            const reply = text || "(no response)";
+            typingBubble.remove();
+            addBubble("bot", reply);
+            history.push({ role: "model", parts: [{ text: reply }] });
+          }
+          // Trim history to last 50 turns
+          if (history.length > 50) history = history.slice(-50);
+          setStatus("");
+        } catch (err) {
+          typingBubble.remove();
+          addBubble("bot", `⚠️ ${err.message}`);
+          setStatus(err.message, true);
+        } finally {
+          sendBtn.disabled = false;
+          msgBox.focus();
+        }
+      }
+
+      sendBtn.addEventListener("click", send);
+      msgBox.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          send();
+        }
+      });
+      msgBox.addEventListener("input", () => {
+        msgBox.style.height = "auto";
+        msgBox.style.height = msgBox.scrollHeight + "px";
+      });
+
+      // Suggestion chips fill the box and send immediately.
+      suggestions.querySelectorAll(".chip").forEach((chip) => {
+        chip.addEventListener("click", () => {
+          msgBox.value = chip.textContent;
+          send();
+        });
+      });
+
+      resetBtn.addEventListener("click", () => {
+        history = [];
+        log.innerHTML = "";
+        if (suggestions) suggestions.style.display = "flex";
+        setStatus("Conversation cleared.");
+        msgBox.focus();
+      });
+    </script>
+  </body>
+</html>

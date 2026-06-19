@@ -1,0 +1,30 @@
+# Dependencies for the Python projects in this workspace.
+# Install with:  pip install -r requirements.txt
+
+# Emotion Detection.py
+opencv-python
+matplotlib
+deepface
+
+# Face Filter.py  (also uses opencv-python + numpy)
+numpy
+
+# Gemini ChatBot.py
+google-genai
+pillow
+gradio
+ipython
+
+# Youtube Summarizer.py
+streamlit
+pandas
+openpyxl
+pytube
+youtube-transcript-api
+python-dotenv
+nest-asyncio
+faiss-cpu
+sentence-transformers
+langchain
+langchain-community
+langchain-huggingface
