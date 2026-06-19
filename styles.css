@@ -708,13 +708,18 @@ textarea:focus {
   .hero {
     grid-template-columns: 1fr;
     text-align: center;
-    gap: 28px;
+    gap: 24px;
+    padding-top: clamp(40px, 8vw, 72px);
   }
 
   .hero-left,
   .hero-right {
     text-align: center;
     align-items: center;
+  }
+
+  .hero-side p {
+    max-width: 40ch;
   }
 
   .hero-center {
@@ -727,16 +732,111 @@ textarea:focus {
   }
 
   .about {
-    gap: 24px;
+    gap: 20px;
   }
 }
 
-@media (max-width: 560px) {
-  .topnav {
-    gap: 14px;
+@media (max-width: 600px) {
+  .shell {
+    width: calc(100% - 32px);
   }
 
-  .topnav a:not(.nav-cta) {
+  .demo-main {
+    width: calc(100% - 32px);
+    padding-top: 24px;
+  }
+
+  .topbar {
+    padding: 13px 18px;
+  }
+
+  .topnav {
+    gap: 16px;
+  }
+
+  .section {
+    margin-top: 56px;
+  }
+
+  .section-heading {
+    margin-bottom: 28px;
+  }
+
+  .demo-panel {
+    padding: 20px;
+    border-radius: 20px;
+  }
+
+  .about {
+    padding: 24px;
+  }
+
+  .card {
+    padding: 22px;
+  }
+
+  .card h3 {
+    font-size: 1.5rem;
+  }
+
+  /* Full-width, easy-to-tap buttons */
+  .hero-actions,
+  .contact-actions {
+    width: 100%;
+  }
+
+  .hero-actions .button,
+  .contact-actions .button {
+    flex: 1 1 160px;
+  }
+
+  .controls .button {
+    flex: 1 1 auto;
+  }
+
+  .chat-log {
+    max-height: 60vh;
+  }
+}
+
+@media (max-width: 430px) {
+  .topnav {
+    gap: 12px;
+  }
+
+  .topnav a {
+    font-size: 0.9rem;
+  }
+
+  .topnav .nav-cta {
+    padding: 8px 13px;
+  }
+
+  .hero-side h1 {
+    font-size: clamp(2.2rem, 12vw, 3rem);
+  }
+
+  .hero-tagline {
+    font-size: 1rem;
+  }
+
+  .bubble {
+    max-width: 92%;
+  }
+
+  /* Stack the message box and send button */
+  .chat-input-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .chat-input-row .button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 360px) {
+  .brand-text {
     display: none;
   }
 }
